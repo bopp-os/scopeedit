@@ -11,8 +11,7 @@ makedepends=('make')
 optdepends=('python-pick: terminal UI (scopeedit)'
             'scopebuddy-git: runs games with the configs scopeedit edits')
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/bopp-os/scopeedit/archive/refs/tags/v${pkgver}.tar.gz")
-# Pinned once the v${pkgver} tag exists.
-sha256sums=('SKIP')
+sha256sums=('68ab675605e0b648d266a4febccebb4733fc5bc49eca9ce17d93061222a58cd0')
 
 check() {
   cd "${srcdir}/${pkgname}-${pkgver}"
