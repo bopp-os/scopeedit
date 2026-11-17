@@ -129,7 +129,7 @@ class Window(Gtk.ApplicationWindow):
         self.refreshing = True
         self.list_box.remove_all()
         if self.global_button.get_active():
-            files = sorted(f for f in os.listdir(se.CONFIG_DIR) if f.endswith(".conf"))
+            files = se.get_global_files()
             items = [(f, os.path.join(se.CONFIG_DIR, f)) for f in files]
         else:
             items = se.get_game_configs()
@@ -288,6 +288,7 @@ class Window(Gtk.ApplicationWindow):
                             buttons=["Cancel", "Re-enable"], cancel_button=0,
                             default_button=1).choose(self, None, done)
         else:
+            se.ensure_config_dirs()
             with open(path, "w") as f:
                 f.write(f"# {name}\n")
             self.show_game(path)

@@ -93,7 +93,6 @@ APPID_DIR = os.path.join(CONFIG_DIR, "AppID")
 GLOBAL_CONFIG = os.path.join(CONFIG_DIR, "scb.conf")
 DATABASE_FILE = os.path.join(CONFIG_DIR, "scopeedit.db")
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "scopeedit.json")
-GLOBAL_FILES = [file for file in os.listdir(CONFIG_DIR) if file.endswith(".conf") and file != "scopeedit.db"]
 DEFAULT_SETTINGS = {"page_size": "auto", "editor": "", "show_appid": True, "show_hidden": False, "show_legend": True}
 SETTINGS = dict(DEFAULT_SETTINGS)
 
@@ -102,6 +101,20 @@ def debug(message):
     if os.environ.get("DEBUG"):
         print(f"DEBUG: {message}", file=sys.stderr)
 
+def list_dir(path):
+    """Files in path, or [] when it doesn't exist yet (no config has been saved)."""
+    try:
+        return os.listdir(path)
+    except FileNotFoundError:
+        return []
+
+def get_global_files():
+    return sorted(file for file in list_dir(CONFIG_DIR) if file.endswith(".conf"))
+
+def ensure_config_dirs():
+    """Creates the ScopeBuddy config folders. Called just before a config is written."""
+    os.makedirs(APPID_DIR, exist_ok=True)
+
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
         with open(SETTINGS_FILE, "r") as f:
@@ -109,6 +122,9 @@ def load_settings():
         debug(f"Loaded settings: {SETTINGS}")
 
 def save_settings():
+    if not os.path.isdir(CONFIG_DIR):
+        debug("No config folder yet; keeping settings in memory")
+        return
     with open(SETTINGS_FILE, "w") as f:
         json.dump(SETTINGS, f, indent=2)
     debug(f"Saved settings: {SETTINGS}")
@@ -144,10 +160,11 @@ def get_game_name(app_id):
         name = app_data["data"]["name"]
         debug(f"Found game name from API: {name}")
 
-        # Add to database
-        with open(DATABASE_FILE, "a") as f:
-            f.write(f"{app_id} {name}\n")
-            debug(f"Added to database: {app_id} {name}")
+        # Add to database, once the config folder exists
+        if os.path.isdir(CONFIG_DIR):
+            with open(DATABASE_FILE, "a") as f:
+                f.write(f"{app_id} {name}\n")
+                debug(f"Added to database: {app_id} {name}")
         return name
 
     except (urllib.error.URLError, OSError) as e:
@@ -178,7 +195,7 @@ def search_game_by_name(game_name):
 def get_game_configs():
     """Returns (label, path) for each per-game config, sorted by game name."""
     configs = []
-    for file in os.listdir(APPID_DIR):
+    for file in list_dir(APPID_DIR):
         hidden = file.endswith(".conf.disabled")
         if file.endswith(".conf") or (hidden and SETTINGS["show_hidden"]):
             debug(f"Found potential config file: {file}")
@@ -321,13 +338,11 @@ def options_menu():
 
 def edit_global():
     debug("edit_global called")
-    if not GLOBAL_FILES:
-      print("No Global files found.")
-      return False
-    GLOBAL_FILES_LIST = []
-    for file in GLOBAL_FILES:
-        GLOBAL_FILES_LIST.append(file)
-    GLOBAL_FILES_LIST.append("Back")
+    global_files = get_global_files()
+    if not global_files:
+        print("No Global files found.")
+        return False
+    GLOBAL_FILES_LIST = global_files + ["Back"]
 
     title = "Select a Global Configuration to edit:"
     selected = pick(GLOBAL_FILES_LIST, title, indicator='->', multiselect=False)
@@ -353,16 +368,6 @@ def edit_global():
 def list_configs():
     """Lists available configurations and handles user interaction."""
     debug("list_configs called")
-
-    # Ensure config directories exist
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    os.makedirs(APPID_DIR, exist_ok=True)
-
-    # Create Database if it doesn't exist
-    if not os.path.exists(DATABASE_FILE):
-        debug(f"DATABASE_FILE does not exist, creating: {DATABASE_FILE}")
-        with open(DATABASE_FILE, "w") as f:
-            pass
 
     title = "Select a ScopeBuddy configuration to edit:"
     choice = pick_game(title, ["Global Configuration"],
@@ -457,6 +462,7 @@ def create_new_config():
 
         game_name = get_game_name(app_id)
 
+        ensure_config_dirs()
         with open(new_config_file, "w") as f:
             f.write(f"# {game_name}\n")
 
