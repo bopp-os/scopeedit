@@ -60,6 +60,12 @@ class Picker:
             curses.curs_set(0)
         except curses.error:
             pass  # some terminals can't hide the cursor
+        try:
+            # Keep the terminal's own colours, including a transparent background
+            curses.start_color()
+            curses.use_default_colors()
+        except curses.error:
+            pass  # terminals without colour support
         while True:
             self.draw(screen)
             key = screen.getch()
