@@ -6,14 +6,80 @@ import shlex
 import shutil
 import subprocess
 import sys
+import textwrap
 import urllib.error
 import urllib.parse
 import urllib.request
 
-try:
-    from pick import pick, Picker
-except ImportError:
-    pick = Picker = None  # only the CLI needs pick; checked in main()
+
+KEYS_UP = (curses.KEY_UP, ord("k"))
+KEYS_DOWN = (curses.KEY_DOWN, ord("j"))
+KEYS_ENTER = (curses.KEY_ENTER, ord("\n"), ord("\r"))
+
+
+class Picker:
+    """Single-choice terminal menu. start() returns (option, index); a quit key returns (None, -1)."""
+
+    def __init__(self, options, title=None, indicator="*", default_index=0, quit_keys=None):
+        if not options:
+            raise ValueError("options should not be an empty list")
+        self.options = options
+        self.title = title
+        self.indicator = indicator
+        self.index = max(0, min(default_index, len(options) - 1))
+        self.quit_keys = tuple(quit_keys or ())
+
+    def lines(self, width):
+        """Title rows (wrapped to the terminal) and a blank row, then the options."""
+        title = []
+        if self.title:
+            for line in self.title.split("\n"):
+                title += textwrap.wrap(line, max(1, width - 1)) or [""]
+            title.append("")
+        pad = " " * len(self.indicator)
+        options = [f"{self.indicator if i == self.index else pad} {option}" for i, option in enumerate(self.options)]
+        return title, options
+
+    def draw(self, screen):
+        screen.erase()
+        height, width = screen.getmaxyx()
+        title, options = self.lines(width)
+        # Scroll so the current option stays visible below the title
+        rows = max(1, height - len(title) - 1)
+        first = max(0, self.index - rows + 1)
+        y = 0
+        for line in title + options[first:first + rows]:
+            if y >= height:
+                break
+            screen.addnstr(y, 0, line, max(0, width - 1))
+            y += 1
+        screen.refresh()
+
+    def run(self, screen):
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass  # some terminals can't hide the cursor
+        while True:
+            self.draw(screen)
+            key = screen.getch()
+            if key in KEYS_UP:
+                self.index = (self.index - 1) % len(self.options)
+            elif key in KEYS_DOWN:
+                self.index = (self.index + 1) % len(self.options)
+            elif key in KEYS_ENTER:
+                return self.options[self.index], self.index
+            elif key in self.quit_keys:
+                return None, -1
+
+    def start(self):
+        return curses.wrapper(self.run)
+
+
+def pick(options, title=None, indicator="*", default_index=0, quit_keys=None, multiselect=False):
+    if multiselect:
+        raise NotImplementedError("multiselect is not supported")
+    return Picker(options, title, indicator, default_index, quit_keys).start()
 
 HOME = os.environ.get("HOME")
 CONFIG_DIR = os.path.join(HOME, ".config/scopebuddy")
@@ -122,7 +188,7 @@ def get_game_configs():
 def get_page_size(fixed_rows):
     if SETTINGS["page_size"] != "auto":
         return SETTINGS["page_size"]
-    # pick draws the title (up to 2 rows when wrapped) and a blank line above the options; keep 1 spare row
+    # Picker draws the title (up to 2 rows when wrapped) and a blank line above the options; keep 1 spare row
     return max(1, shutil.get_terminal_size().lines - 4 - fixed_rows)
 
 def pick_game(title, top_options, bottom_options, on_right=None):
@@ -403,10 +469,6 @@ def main():
     parser = argparse.ArgumentParser(description="ScopeBuddy configuration editor")
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug output")
     args = parser.parse_args()
-    if pick is None:
-        print("Error: The 'pick' module is not installed.")
-        print("Please install it using: pip install pick")
-        sys.exit(1)
     if args.debug:
         os.environ["DEBUG"] = "1"
     load_settings()
