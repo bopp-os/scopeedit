@@ -8,8 +8,7 @@ url="https://github.com/bopp-os/scopeedit"
 license=('GPL-3.0-or-later')
 depends=('python' 'python-gobject' 'gtk4' 'glib2' 'pango')
 makedepends=('make')
-optdepends=('python-pick: terminal UI (scopeedit)'
-            'scopebuddy-git: runs games with the configs scopeedit edits')
+optdepends=('scopebuddy-git: runs games with the configs scopeedit edits')
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/bopp-os/scopeedit/archive/refs/tags/v${pkgver}.tar.gz")
 sha256sums=('68ab675605e0b648d266a4febccebb4733fc5bc49eca9ce17d93061222a58cd0')
 

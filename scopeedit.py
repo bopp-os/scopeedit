@@ -6,14 +6,86 @@ import shlex
 import shutil
 import subprocess
 import sys
+import textwrap
 import urllib.error
 import urllib.parse
 import urllib.request
 
-try:
-    from pick import pick, Picker
-except ImportError:
-    pick = Picker = None  # only the CLI needs pick; checked in main()
+
+KEYS_UP = (curses.KEY_UP, ord("k"))
+KEYS_DOWN = (curses.KEY_DOWN, ord("j"))
+KEYS_ENTER = (curses.KEY_ENTER, ord("\n"), ord("\r"))
+
+
+class Picker:
+    """Single-choice terminal menu. start() returns (option, index); a quit key returns (None, -1)."""
+
+    def __init__(self, options, title=None, indicator="*", default_index=0, quit_keys=None):
+        if not options:
+            raise ValueError("options should not be an empty list")
+        self.options = options
+        self.title = title
+        self.indicator = indicator
+        self.index = max(0, min(default_index, len(options) - 1))
+        self.quit_keys = tuple(quit_keys or ())
+
+    def lines(self, width):
+        """Title rows (wrapped to the terminal) and a blank row, then the options."""
+        title = []
+        if self.title:
+            for line in self.title.split("\n"):
+                title += textwrap.wrap(line, max(1, width - 1)) or [""]
+            title.append("")
+        pad = " " * len(self.indicator)
+        options = [f"{self.indicator if i == self.index else pad} {option}" for i, option in enumerate(self.options)]
+        return title, options
+
+    def draw(self, screen):
+        screen.erase()
+        height, width = screen.getmaxyx()
+        title, options = self.lines(width)
+        # Scroll so the current option stays visible below the title
+        rows = max(1, height - len(title) - 1)
+        first = max(0, self.index - rows + 1)
+        y = 0
+        for line in title + options[first:first + rows]:
+            if y >= height:
+                break
+            screen.addnstr(y, 0, line, max(0, width - 1))
+            y += 1
+        screen.refresh()
+
+    def run(self, screen):
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass  # some terminals can't hide the cursor
+        try:
+            # Keep the terminal's own colours, including a transparent background
+            curses.start_color()
+            curses.use_default_colors()
+        except curses.error:
+            pass  # terminals without colour support
+        while True:
+            self.draw(screen)
+            key = screen.getch()
+            if key in KEYS_UP:
+                self.index = (self.index - 1) % len(self.options)
+            elif key in KEYS_DOWN:
+                self.index = (self.index + 1) % len(self.options)
+            elif key in KEYS_ENTER:
+                return self.options[self.index], self.index
+            elif key in self.quit_keys:
+                return None, -1
+
+    def start(self):
+        return curses.wrapper(self.run)
+
+
+def pick(options, title=None, indicator="*", default_index=0, quit_keys=None, multiselect=False):
+    if multiselect:
+        raise NotImplementedError("multiselect is not supported")
+    return Picker(options, title, indicator, default_index, quit_keys).start()
 
 HOME = os.environ.get("HOME")
 CONFIG_DIR = os.path.join(HOME, ".config/scopebuddy")
@@ -21,7 +93,6 @@ APPID_DIR = os.path.join(CONFIG_DIR, "AppID")
 GLOBAL_CONFIG = os.path.join(CONFIG_DIR, "scb.conf")
 DATABASE_FILE = os.path.join(CONFIG_DIR, "scopeedit.db")
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "scopeedit.json")
-GLOBAL_FILES = [file for file in os.listdir(CONFIG_DIR) if file.endswith(".conf") and file != "scopeedit.db"]
 DEFAULT_SETTINGS = {"page_size": "auto", "editor": "", "show_appid": True, "show_hidden": False, "show_legend": True}
 SETTINGS = dict(DEFAULT_SETTINGS)
 
@@ -30,6 +101,20 @@ def debug(message):
     if os.environ.get("DEBUG"):
         print(f"DEBUG: {message}", file=sys.stderr)
 
+def list_dir(path):
+    """Files in path, or [] when it doesn't exist yet (no config has been saved)."""
+    try:
+        return os.listdir(path)
+    except FileNotFoundError:
+        return []
+
+def get_global_files():
+    return sorted(file for file in list_dir(CONFIG_DIR) if file.endswith(".conf"))
+
+def ensure_config_dirs():
+    """Creates the ScopeBuddy config folders. Called just before a config is written."""
+    os.makedirs(APPID_DIR, exist_ok=True)
+
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
         with open(SETTINGS_FILE, "r") as f:
@@ -37,6 +122,9 @@ def load_settings():
         debug(f"Loaded settings: {SETTINGS}")
 
 def save_settings():
+    if not os.path.isdir(CONFIG_DIR):
+        debug("No config folder yet; keeping settings in memory")
+        return
     with open(SETTINGS_FILE, "w") as f:
         json.dump(SETTINGS, f, indent=2)
     debug(f"Saved settings: {SETTINGS}")
@@ -72,10 +160,11 @@ def get_game_name(app_id):
         name = app_data["data"]["name"]
         debug(f"Found game name from API: {name}")
 
-        # Add to database
-        with open(DATABASE_FILE, "a") as f:
-            f.write(f"{app_id} {name}\n")
-            debug(f"Added to database: {app_id} {name}")
+        # Add to database, once the config folder exists
+        if os.path.isdir(CONFIG_DIR):
+            with open(DATABASE_FILE, "a") as f:
+                f.write(f"{app_id} {name}\n")
+                debug(f"Added to database: {app_id} {name}")
         return name
 
     except (urllib.error.URLError, OSError) as e:
@@ -106,7 +195,7 @@ def search_game_by_name(game_name):
 def get_game_configs():
     """Returns (label, path) for each per-game config, sorted by game name."""
     configs = []
-    for file in os.listdir(APPID_DIR):
+    for file in list_dir(APPID_DIR):
         hidden = file.endswith(".conf.disabled")
         if file.endswith(".conf") or (hidden and SETTINGS["show_hidden"]):
             debug(f"Found potential config file: {file}")
@@ -122,7 +211,7 @@ def get_game_configs():
 def get_page_size(fixed_rows):
     if SETTINGS["page_size"] != "auto":
         return SETTINGS["page_size"]
-    # pick draws the title (up to 2 rows when wrapped) and a blank line above the options; keep 1 spare row
+    # Picker draws the title (up to 2 rows when wrapped) and a blank line above the options; keep 1 spare row
     return max(1, shutil.get_terminal_size().lines - 4 - fixed_rows)
 
 def pick_game(title, top_options, bottom_options, on_right=None):
@@ -249,13 +338,11 @@ def options_menu():
 
 def edit_global():
     debug("edit_global called")
-    if not GLOBAL_FILES:
-      print("No Global files found.")
-      return False
-    GLOBAL_FILES_LIST = []
-    for file in GLOBAL_FILES:
-        GLOBAL_FILES_LIST.append(file)
-    GLOBAL_FILES_LIST.append("Back")
+    global_files = get_global_files()
+    if not global_files:
+        print("No Global files found.")
+        return False
+    GLOBAL_FILES_LIST = global_files + ["Back"]
 
     title = "Select a Global Configuration to edit:"
     selected = pick(GLOBAL_FILES_LIST, title, indicator='->', multiselect=False)
@@ -281,16 +368,6 @@ def edit_global():
 def list_configs():
     """Lists available configurations and handles user interaction."""
     debug("list_configs called")
-
-    # Ensure config directories exist
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    os.makedirs(APPID_DIR, exist_ok=True)
-
-    # Create Database if it doesn't exist
-    if not os.path.exists(DATABASE_FILE):
-        debug(f"DATABASE_FILE does not exist, creating: {DATABASE_FILE}")
-        with open(DATABASE_FILE, "w") as f:
-            pass
 
     title = "Select a ScopeBuddy configuration to edit:"
     choice = pick_game(title, ["Global Configuration"],
@@ -385,6 +462,7 @@ def create_new_config():
 
         game_name = get_game_name(app_id)
 
+        ensure_config_dirs()
         with open(new_config_file, "w") as f:
             f.write(f"# {game_name}\n")
 
@@ -403,10 +481,6 @@ def main():
     parser = argparse.ArgumentParser(description="ScopeBuddy configuration editor")
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug output")
     args = parser.parse_args()
-    if pick is None:
-        print("Error: The 'pick' module is not installed.")
-        print("Please install it using: pip install pick")
-        sys.exit(1)
     if args.debug:
         os.environ["DEBUG"] = "1"
     load_settings()

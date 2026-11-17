@@ -19,7 +19,6 @@ An editor for [ScopeBuddy](https://github.com/HikariKnight/ScopeBuddy) configs. 
 
 - Python 3
 - ScopeBuddy
-- CLI: [`pick`](https://pypi.org/project/pick/) (`pip install --user pick`)
 - GUI: GTK 4 and PyGObject (`python-gobject` on Arch, `python3-gobject` on Fedora)
 
 ## Install
